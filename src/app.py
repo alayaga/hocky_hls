@@ -1,19 +1,22 @@
-from fastapi import FastAPI,BackgroundTasks,WebSocket,WebSocketDisconnect
+from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect
 from record import RecordManager
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
 import logging
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger("hocky_hls")
 
-# SRC_PATH = "/data/hls_live"
-# DST_PATH = "/app/data"
-SRC_PATH = r"F:\TheHockeyProject\test\data\hls_live"
-DST_PATH = r"F:\TheHockeyProject\test\hockey_video"
+SRC_PATH = "/data/hls_live"
+DST_PATH = "/app/data"
+# SRC_PATH = r"F:\TheHockeyProject\test\data\hls_live"    # 本地测试路径
+# DST_PATH = r"F:\TheHockeyProject\test\hockey_video"     # 本地测试路径
 
 recorder = RecordManager()
+
 
 class ConnectionManager:
     def __init__(self):
@@ -30,7 +33,9 @@ class ConnectionManager:
         logger.info(f"[WS] 客户端已断开，当前连接数: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict):
-        logger.info(f"[WS] 准备广播消息: {message}, 当前连接数: {len(self.active_connections)}")
+        logger.info(
+            f"[WS] 准备广播消息: {message}, 当前连接数: {len(self.active_connections)}"
+        )
         if not self.active_connections:
             logger.warning("[WS] 没有活跃的 WebSocket 连接，广播跳过")
             return
@@ -41,36 +46,55 @@ class ConnectionManager:
             except Exception as e:
                 logger.error(f"[WS] 广播失败: 连接 #{i}, 错误: {e}")
 
+
 manager = ConnectionManager()
+
+
 async def monitor_disk():
-    logger.info("[DISK] 磁盘监控任务已启动，阈值: 80GB，检查间隔: 5秒")
+    logger.info("[DISK] 磁盘监控任务已启动，阈值: 200GB，检查间隔: 5秒")
     alert = False
     while True:
-        stopped, free_space = recorder.check_disk_space(DST_PATH, 80)
-        logger.info(f"[DISK] 剩余: {free_space:.2f}GB | WS连接数: {len(manager.active_connections)} | 录制任务数: {len(recorder.active_tasks)}")
+        stopped, free_space = recorder.check_disk_space(DST_PATH, 200)  # 阈值200GB
+        logger.info(
+            f"[DISK] 剩余: {free_space:.2f}GB | WS连接数: {len(manager.active_connections)} | 录制任务数: {len(recorder.active_tasks)}"
+        )
         if stopped:
             if not alert:
-                logger.warning(f"[DISK] 磁盘空间不足! 剩余: {free_space:.2f}GB，准备广播 DISK_CRITICAL")
-                await manager.broadcast({
-                    "type": "DISK_CRITICAL",
-                    "message": f"磁盘空间不足({free_space:.2f}GB)，已停止所有录制",
-                    "free_space": free_space
-                })
+                logger.warning(
+                    f"[DISK] 磁盘空间不足! 剩余: {free_space:.2f}GB，准备广播 DISK_CRITICAL"
+                )
+                await manager.broadcast(
+                    {
+                        "type": "DISK_CRITICAL",
+                        "message": f"磁盘空间不足({free_space:.2f}GB)，已停止所有录制",
+                        "free_space": free_space,
+                    }
+                )
                 alert = True
                 logger.info("[DISK] 异步执行 stop_all_recordings")
-                asyncio.get_event_loop().run_in_executor(None, recorder.stop_all_recordings)
+                asyncio.get_event_loop().run_in_executor(
+                    None, recorder.stop_all_recordings
+                )
             else:
-                logger.info(f"[DISK] 磁盘仍不足({free_space:.2f}GB)，alert 已激活，不重复广播")
+                logger.info(
+                    f"[DISK] 磁盘仍不足({free_space:.2f}GB)，alert 已激活，不重复广播"
+                )
         else:
             if alert:
-                logger.info(f"[DISK] 磁盘空间已恢复: {free_space:.2f}GB，准备广播 DISK_OK")
-                await manager.broadcast({
-                    "type": "DISK_OK",
-                    "message": f"磁盘空间已恢复({free_space:.2f}GB)",
-                    "free_space": free_space
-                })
+                logger.info(
+                    f"[DISK] 磁盘空间已恢复: {free_space:.2f}GB，准备广播 DISK_OK"
+                )
+                await manager.broadcast(
+                    {
+                        "type": "DISK_OK",
+                        "message": f"磁盘空间已恢复({free_space:.2f}GB)",
+                        "free_space": free_space,
+                    }
+                )
                 alert = False
         await asyncio.sleep(5)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(monitor_disk())
@@ -78,6 +102,7 @@ async def lifespan(app: FastAPI):
     yield
     task.cancel()
     logger.info("[APP] 录制后端关闭")
+
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(
@@ -87,6 +112,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     logger.info("[WS] 收到 WebSocket 连接请求")
@@ -100,11 +127,17 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"[WS] 连接异常: {e}")
         manager.disconnect(websocket)
+
+
 @app.post("/api/hls_start")
-async def start_hls(match_id:int,segment_id:int):
-    logger.info(f"[API] 收到 hls_start 请求: match_id={match_id}, segment_id={segment_id}")
+async def start_hls(match_id: int, segment_id: int):
+    logger.info(
+        f"[API] 收到 hls_start 请求: match_id={match_id}, segment_id={segment_id}"
+    )
     try:
-        success,result = recorder.start_recording(match_id,segment_id,SRC_PATH,DST_PATH)
+        success, result = recorder.start_recording(
+            match_id, segment_id, SRC_PATH, DST_PATH
+        )
         if success:
             logger.info(f"[API] hls_start 成功: {result}")
             return f"success start, save to {result}"
@@ -113,6 +146,7 @@ async def start_hls(match_id:int,segment_id:int):
     except Exception as e:
         logger.error(f"[API] hls_start 异常: {e}")
         return {"error": str(e)}
+
 
 @app.post("/api/hls_stop")
 async def stop_hls(background_tasks: BackgroundTasks):
@@ -124,12 +158,17 @@ async def stop_hls(background_tasks: BackgroundTasks):
         logger.error(f"[API] hls_stop 异常: {e}")
         return "error"
 
+
 @app.post("/api/test_alert")
 async def test_alert():
-    logger.info(f"[TEST] 手动触发 DISK_CRITICAL 测试，当前连接数: {len(manager.active_connections)}")
-    await manager.broadcast({
-        "type": "DISK_CRITICAL",
-        "message": "测试告警：磁盘空间不足",
-        "free_space": 0.0
-    })
+    logger.info(
+        f"[TEST] 手动触发 DISK_CRITICAL 测试，当前连接数: {len(manager.active_connections)}"
+    )
+    await manager.broadcast(
+        {
+            "type": "DISK_CRITICAL",
+            "message": "测试告警：磁盘空间不足",
+            "free_space": 0.0,
+        }
+    )
     return {"status": "alert_sent", "connections": len(manager.active_connections)}
